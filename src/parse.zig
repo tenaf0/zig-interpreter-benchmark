@@ -6,8 +6,8 @@ const eql = std.meta.eql;
 
 const writer = std.io.getStdOut().writer();
 
-pub fn parse(list: anytype) !instr.Program {
-    const file = try std.fs.openFileAbsoluteZ("/home/florian/program.asmzig", .{});
+pub fn parse(list: anytype, file_name: [*:0]const u8) !instr.Program {
+    const file = try std.fs.openFileAbsoluteZ(file_name, .{});
     defer file.close();
 
     var buffer: [24]u8 = undefined;

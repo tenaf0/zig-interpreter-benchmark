@@ -5,7 +5,7 @@ const parse = @import("parse.zig");
 
 const Allocator = std.mem.Allocator;
 
-const is_direct_threaded = false;
+const is_direct_threaded = true;
 const enable_debug_print = false;
 const interactive = false;
 
@@ -233,7 +233,13 @@ pub fn main() !void {
     var gpa = std.heap.GeneralPurposeAllocator(.{}){};
     var allocator = gpa.allocator();
     var list = std.ArrayList(instr.Instr).init(allocator);
-    const program: instr.Program = try parse.parse(&list); //arr[0..arr.len];
+
+    // var argIterator = std.process.args();
+    var argIterator = try std.process.ArgIterator.initWithAllocator(allocator);
+
+    _ = argIterator.skip();
+
+    const program: instr.Program = try parse.parse(&list, argIterator.next() orelse return error.NoArg); //arr[0..arr.len];
 
     var stack = Stack{
         .locals = undefined,
