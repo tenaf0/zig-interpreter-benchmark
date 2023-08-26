@@ -5,7 +5,7 @@ const parse = @import("parse.zig");
 
 const Allocator = std.mem.Allocator;
 
-const is_direct_threaded = true;
+const is_direct_threaded = false;
 const enable_debug_print = false;
 const interactive = false;
 
@@ -41,11 +41,11 @@ const Stack = struct {
     }
 };
 
-fn execute(program: instr.Program, stack: *Stack) !void {
+fn execute(program: instr.Program, stack: *Stack, memory: [*]u64) !void {
     var pc: u64 = 0;
     while (pc < program.len) {
         if (enable_debug_print) {
-            try writer.print("pc: {d} stack: ", .{pc});
+            try writer.print("{s} pc: {d} stack: ", .{ @tagName(program[pc].instruction), pc / 2 });
             try stack.print();
         }
 
@@ -81,6 +81,20 @@ fn execute(program: instr.Program, stack: *Stack) !void {
 
                 pc += 2;
             },
+            instr.Command.mem_write => {
+                const value: u64 = @intCast(stack.pop());
+                const mem_index: usize = @intCast(stack.pop());
+
+                memory[mem_index] = value;
+
+                pc += 2;
+            },
+            instr.Command.mem_read => {
+                const mem_index: usize = @intCast(stack.pop());
+                stack.push(@intCast(memory[mem_index]));
+
+                pc += 2;
+            },
             instr.Command.goto => {
                 const rel_pc: i64 = program[pc + 1].param;
 
@@ -113,8 +127,8 @@ fn execute(program: instr.Program, stack: *Stack) !void {
 
                 pc += 2;
             },
-            instr.Command.nop => {
-                pc += 2;
+            instr.Command.exit => {
+                break;
             },
         }
     }
@@ -122,7 +136,7 @@ fn execute(program: instr.Program, stack: *Stack) !void {
 
 // Functions for direct threaded interpreter
 
-const DirectThreadedProgram = union { fn_ptr: *const fn (*Stack, [*]DirectThreadedProgram) void, param: i64 };
+const DirectThreadedProgram = union { fn_ptr: *const fn (*Stack, [*]u64, [*]DirectThreadedProgram) void, param: i64 };
 
 fn mapProgramToDirectThreaded(allocator: *Allocator, program: instr.Program) ![*]DirectThreadedProgram {
     var buffer = try allocator.alloc(DirectThreadedProgram, program.len);
@@ -135,11 +149,13 @@ fn mapProgramToDirectThreaded(allocator: *Allocator, program: instr.Program) ![*
             instr.Command.c => .{ .fn_ptr = &c },
             instr.Command.load => .{ .fn_ptr = &load },
             instr.Command.save => .{ .fn_ptr = &save },
+            instr.Command.mem_write => .{ .fn_ptr = &mem_write },
+            instr.Command.mem_read => .{ .fn_ptr = &mem_read },
             instr.Command.goto => .{ .fn_ptr = &goto },
             instr.Command.jmp_eq => .{ .fn_ptr = &jmp_eq },
             instr.Command.jmp_lt => .{ .fn_ptr = &jmp_lt },
             instr.Command.print => .{ .fn_ptr = &print },
-            instr.Command.nop => .{ .fn_ptr = &nop },
+            instr.Command.exit => .{ .fn_ptr = &exit },
         };
         buffer[i + 1] = .{ .param = program[i + 1].param };
     }
@@ -147,7 +163,7 @@ fn mapProgramToDirectThreaded(allocator: *Allocator, program: instr.Program) ![*
     return buffer.ptr;
 }
 
-inline fn goto_next_fn(stack: *Stack, instr_data: [*]DirectThreadedProgram, rel_pc: i64) void {
+inline fn goto_next_fn(stack: *Stack, memory: [*]u64, instr_data: [*]DirectThreadedProgram, rel_pc: i64) void {
     const ptr = if (rel_pc > 0) instr_data + @as(usize, @intCast(rel_pc)) else instr_data - @as(usize, @intCast(-rel_pc));
     const fn_ptr = ptr[0].fn_ptr;
 
@@ -155,42 +171,56 @@ inline fn goto_next_fn(stack: *Stack, instr_data: [*]DirectThreadedProgram, rel_
     if (enable_debug_print) {
         stack.print() catch {};
     }
-    @call(.always_tail, fn_ptr, .{ stack, ptr });
+    @call(.always_tail, fn_ptr, .{ stack, memory, ptr });
 }
 
-fn add(stack: *Stack, instr_data: [*]DirectThreadedProgram) void {
+fn add(stack: *Stack, memory: [*]u64, instr_data: [*]DirectThreadedProgram) void {
     stack.push(stack.pop() + stack.pop());
 
-    goto_next_fn(stack, instr_data, 2);
+    goto_next_fn(stack, memory, instr_data, 2);
 }
-fn mul(stack: *Stack, instr_data: [*]DirectThreadedProgram) void {
+fn mul(stack: *Stack, memory: [*]u64, instr_data: [*]DirectThreadedProgram) void {
     stack.push(stack.pop() * stack.pop());
 
-    goto_next_fn(stack, instr_data, 2);
+    goto_next_fn(stack, memory, instr_data, 2);
 }
-fn c(stack: *Stack, instr_data: [*]DirectThreadedProgram) void {
+fn c(stack: *Stack, memory: [*]u64, instr_data: [*]DirectThreadedProgram) void {
     stack.push(instr_data[1].param);
 
-    goto_next_fn(stack, instr_data, 2);
+    goto_next_fn(stack, memory, instr_data, 2);
 }
-fn load(stack: *Stack, instr_data: [*]DirectThreadedProgram) void {
+fn load(stack: *Stack, memory: [*]u64, instr_data: [*]DirectThreadedProgram) void {
     const index = instr_data[1].param;
     stack.push(stack.locals[@intCast(index)]);
 
-    goto_next_fn(stack, instr_data, 2);
+    goto_next_fn(stack, memory, instr_data, 2);
 }
-fn save(stack: *Stack, instr_data: [*]DirectThreadedProgram) void {
+fn save(stack: *Stack, memory: [*]u64, instr_data: [*]DirectThreadedProgram) void {
     const index = instr_data[1].param;
     stack.locals[@intCast(index)] = stack.pop();
 
-    goto_next_fn(stack, instr_data, 2);
+    goto_next_fn(stack, memory, instr_data, 2);
 }
-fn goto(stack: *Stack, instr_data: [*]DirectThreadedProgram) void {
+fn mem_write(stack: *Stack, memory: [*]u64, instr_data: [*]DirectThreadedProgram) void {
+    const value: u64 = @intCast(stack.pop());
+    const mem_index: usize = @intCast(stack.pop());
+
+    memory[mem_index] = value;
+
+    goto_next_fn(stack, memory, instr_data, 2);
+}
+fn mem_read(stack: *Stack, memory: [*]u64, instr_data: [*]DirectThreadedProgram) void {
+    const mem_index: usize = @intCast(stack.pop());
+    stack.push(@intCast(memory[mem_index]));
+
+    goto_next_fn(stack, memory, instr_data, 2);
+}
+fn goto(stack: *Stack, memory: [*]u64, instr_data: [*]DirectThreadedProgram) void {
     const rel_pc: i64 = instr_data[1].param;
 
-    goto_next_fn(stack, instr_data, 2 * rel_pc);
+    goto_next_fn(stack, memory, instr_data, 2 * rel_pc);
 }
-fn jmp_eq(stack: *Stack, instr_data: [*]DirectThreadedProgram) void {
+fn jmp_eq(stack: *Stack, memory: [*]u64, instr_data: [*]DirectThreadedProgram) void {
     var rel_pc: i64 = undefined;
     if (stack.pop() == stack.pop()) {
         rel_pc = 2 * instr_data[1].param;
@@ -198,9 +228,9 @@ fn jmp_eq(stack: *Stack, instr_data: [*]DirectThreadedProgram) void {
         rel_pc = 2;
     }
 
-    goto_next_fn(stack, instr_data, rel_pc);
+    goto_next_fn(stack, memory, instr_data, rel_pc);
 }
-fn jmp_lt(stack: *Stack, instr_data: [*]DirectThreadedProgram) void {
+fn jmp_lt(stack: *Stack, memory: [*]u64, instr_data: [*]DirectThreadedProgram) void {
     var rel_pc: i64 = undefined;
     if (stack.pop() > stack.pop()) {
         rel_pc = 2 * instr_data[1].param;
@@ -208,24 +238,24 @@ fn jmp_lt(stack: *Stack, instr_data: [*]DirectThreadedProgram) void {
         rel_pc = 2;
     }
 
-    goto_next_fn(stack, instr_data, rel_pc);
+    goto_next_fn(stack, memory, instr_data, rel_pc);
 }
-fn print(stack: *Stack, instr_data: [*]DirectThreadedProgram) void {
+fn print(stack: *Stack, memory: [*]u64, instr_data: [*]DirectThreadedProgram) void {
     const param = stack.pop();
     writer.print("{d}\n", .{param}) catch {};
 
-    goto_next_fn(stack, instr_data, 2);
+    goto_next_fn(stack, memory, instr_data, 2);
 }
 
-fn nop(stack: *Stack, _: [*]DirectThreadedProgram) void {
+fn exit(stack: *Stack, _: [*]u64, _: [*]DirectThreadedProgram) void {
     if (enable_debug_print) {
         stack.print() catch {};
     }
     return;
 }
 
-fn execute_direct_threaded(instr_data: [*]DirectThreadedProgram, stack: *Stack) !void {
-    instr_data[0].fn_ptr(stack, instr_data);
+fn execute_direct_threaded(instr_data: [*]DirectThreadedProgram, stack: *Stack, memory: [*]u64) !void {
+    instr_data[0].fn_ptr(stack, memory, instr_data);
     return;
 }
 
@@ -241,10 +271,18 @@ pub fn main() !void {
 
     const program: instr.Program = try parse.parse(&list, argIterator.next() orelse return error.NoArg); //arr[0..arr.len];
 
+    var i: usize = 0;
+    while (i < program.len) : (i += 2) {
+        try writer.print("{s} {d}\n", .{ @tagName(program[i].instruction), program[i + 1].param });
+    }
+
+    try writer.print("\n\n", .{});
+
     var stack = Stack{
         .locals = undefined,
         .data = undefined,
     };
+    var memory: [1024]u64 = undefined;
 
     if (is_direct_threaded) {
         var direct_threaded_code = try mapProgramToDirectThreaded(&allocator, program);
@@ -256,10 +294,15 @@ pub fn main() !void {
             is_instr = !is_instr;
         }
 
-        try execute_direct_threaded(direct_threaded_code, &stack);
+        try execute_direct_threaded(direct_threaded_code, &stack, &memory);
     } else {
-        try execute(program, &stack);
+        try execute(program, &stack, &memory);
     }
 
     try stack.print();
+    try writer.print("Memory: ", .{});
+    i = 0;
+    while (i < memory.len) : (i += 1) {
+        try writer.print(", {d}", .{memory[i]});
+    }
 }

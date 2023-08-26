@@ -1,0 +1,74 @@
+c 1000000
+save 7 // $7 = iter
+c 0
+c 1000 // [0]=biggest integer up to which primes will be generated
+mem_write 0
+
+c 0
+save 0 // $0: index for writing numbers
+load 0
+c 0
+mem_read 0
+jmp_lt 2 // empty stack
+goto 9
+load 0
+c 1
+add 0 // $0++
+save 0
+load 0
+load 0
+mem_write 0
+goto -12
+
+
+c 2
+save 1
+load 1
+save 1
+c 2
+save 2 // $2: current index
+load 2
+load 1 // $1: current prime
+mul 0
+save 3
+load 3 // $3: tmp, storing index written to
+c 0
+mem_read 0
+jmp_lt 2
+goto 9 
+load 3
+c 0
+mem_write 0 // write 0 at index
+load 2
+c 1
+add 0
+save 2
+goto -16
+
+load 1
+c 1
+add 0
+save 1
+load 1
+mem_read 0
+c 0
+jmp_eq 2
+goto -29
+load 1
+c 0
+mem_read 0
+c -2
+add 0
+jmp_lt -14
+
+
+load 7
+c -1
+add 0
+save 7
+load 7
+c 0
+jmp_eq 2
+goto -64
+
+exit 0
